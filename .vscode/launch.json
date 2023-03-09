@@ -1,0 +1,10 @@
+{
+    "configurations": [
+    {
+        "command": "cargo run",
+        "name": "pang",
+        "request": "launch",
+        "type": "node-terminal"
+    }
+    ]
+}
