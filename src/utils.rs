@@ -1,4 +1,4 @@
-use std::{net::TcpStream, io::{Read, Write}};
+use std::{net::TcpStream, io::{Read, Write}, fs};
 
 const SEGMENT_BITS: u8 = 0x7F;
 const CONTINUE_BIT: u8 = 0x80;
@@ -31,27 +31,36 @@ pub fn read_string(stream: &mut TcpStream, length: usize) -> String {
     return String::from_utf8(readed).unwrap();
 }
 
-pub fn write_bytes(stream: &mut TcpStream, bytes: Vec<u8>){
-    stream.write(&bytes).unwrap();
+pub fn write_bytes(stream: &mut TcpStream, buffer: &Vec<u8>){
+    stream.write(buffer).unwrap();
 }
 
-pub fn write_var_int(stream: &mut TcpStream, value: i32){
+pub fn write_var_int(buffer: &mut Vec<u8>, value: i32){
     let mut internal = value;
 
     while (internal & CONTINUE_BIT as i32) != 0 {
-        stream.write(&[((internal as u8 & SEGMENT_BITS) | CONTINUE_BIT)]).unwrap();
+        buffer.push((internal as u8 & SEGMENT_BITS) | CONTINUE_BIT);
         internal = internal >> 7;
     }
 
-    write_bytes(stream, internal.to_be_bytes().try_into().unwrap());
+    buffer.push(internal.try_into().unwrap());
 }
 
-pub fn write_string(stream: &mut TcpStream, string: String){
-    write_bytes(stream, String::into_bytes(string))
+pub fn write_string(buffer: &mut Vec<u8>, string: String){
+    write_var_int(buffer, string.len() as i32);
+    buffer.extend_from_slice(String::into_bytes(string).as_slice())
 }
 
-/*
-pub fn test() -> String {
-    return "hej".to_string();
+pub fn flush(stream: &mut TcpStream, data: &Vec<u8>, id: i32){
+    let mut data_buffer: Vec<u8> = vec![];
+    write_var_int(&mut data_buffer, id);
+    data_buffer.extend(data);
+
+    let mut buffer: Vec<u8> = vec![];
+    write_var_int(&mut buffer, data_buffer.len() as i32);
+    buffer.extend(data_buffer);
+
+    //fs::write("file.bin", &buffer).expect("Failed to write file");
+
+    write_bytes(stream,  &buffer);
 }
-*/
