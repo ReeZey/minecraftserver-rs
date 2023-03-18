@@ -1,4 +1,4 @@
-use std::{net::TcpStream, io::{Read, Write}, fs};
+use std::{ net::TcpStream, io::{Read, Write} };
 
 const SEGMENT_BITS: u8 = 0x7F;
 const CONTINUE_BIT: u8 = 0x80;
@@ -38,10 +38,14 @@ pub fn write_bytes(stream: &mut TcpStream, buffer: &Vec<u8>){
 pub fn write_var_int(buffer: &mut Vec<u8>, value: i32){
     let mut internal = value;
 
-    while (internal & CONTINUE_BIT as i32) != 0 {
+    println!("inital: {}", internal);
+
+    while (internal as u8 & CONTINUE_BIT) != 0 {
         buffer.push((internal as u8 & SEGMENT_BITS) | CONTINUE_BIT);
         internal = internal >> 7;
     }
+
+    println!("internal: {}", internal);
 
     buffer.push(internal.try_into().unwrap());
 }
