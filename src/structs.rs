@@ -1,9 +1,10 @@
-use std::net::TcpStream;
 extern crate serde;
 extern crate serde_json;
+use std::net::TcpStream;
 
 // Import this crate to derive the Serialize and Deserialize traits.
 
+#[derive(Serialize, Deserialize, Debug)]
 pub struct Player {
     pub x: f64,
     pub y: f64,
@@ -11,7 +12,11 @@ pub struct Player {
 
     pub username: String,
     pub uuid: String,
-    pub stream: TcpStream
+}
+
+pub struct OnlinePlayer {
+    pub player: Player,
+    pub stream: TcpStream,
 }
 
 #[derive(Serialize, Deserialize, Debug)]
@@ -43,5 +48,5 @@ pub struct ServerStatus {
     pub version:  ServerVersion,
     pub players: ServerPlayerCount,
     pub description: ServerDescription,
-    pub enforcesSecureChat: bool,
+    pub enforces_secure_chat: bool,
 }

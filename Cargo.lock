@@ -3,6 +3,30 @@
 version = 3
 
 [[package]]
+name = "byteorder"
+version = "1.4.3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "14c189c53d098945499cdfa7ecc63567cf3886b3332b312a5b4585d8d3a6a610"
+
+[[package]]
+name = "cesu8"
+version = "1.1.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "6d43a04d8753f35258c91f8ec639f792891f748a1edbd759cf1dcea3382ad83c"
+
+[[package]]
+name = "fastnbt"
+version = "2.4.3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "f1aab2b0109236f6c89cc81b9e2ef4aced6d585aabe96ac860ee5e9a102eb198"
+dependencies = [
+ "byteorder",
+ "cesu8",
+ "serde",
+ "serde_bytes",
+]
+
+[[package]]
 name = "itoa"
 version = "1.0.6"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -12,6 +36,7 @@ checksum = "453ad9f582a441959e5f0d088b02ce04cfe8d51a8eaf077f12ac6d3e94164ca6"
 name = "minecraftserver"
 version = "0.1.0"
 dependencies = [
+ "fastnbt",
  "serde",
  "serde_derive",
  "serde_json",
@@ -47,6 +72,18 @@ name = "serde"
 version = "1.0.157"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "707de5fcf5df2b5788fca98dd7eab490bc2fd9b7ef1404defc462833b83f25ca"
+dependencies = [
+ "serde_derive",
+]
+
+[[package]]
+name = "serde_bytes"
+version = "0.11.9"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "416bda436f9aab92e02c8e10d49a15ddd339cea90b6e340fe51ed97abb548294"
+dependencies = [
+ "serde",
+]
 
 [[package]]
 name = "serde_derive"
