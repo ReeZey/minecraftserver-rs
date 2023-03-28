@@ -1,11 +1,14 @@
 use std::{ net::TcpStream, io::{Read, Write} };
 
+use crate::structs::{Player, ServerPlayer};
+
 const SEGMENT_BITS: u8 = 0x7F;
 const CONTINUE_BIT: u8 = 0x80;
 
 pub fn read_next(stream: &mut TcpStream) -> u8 {
     let mut buf = [0; 1]; 
-    stream.read_exact(&mut buf).unwrap();
+    let handle = stream.read_exact(&mut buf);
+    if handle.is_err() { drop(stream) }
     return buf[0];
 }
 
@@ -25,7 +28,7 @@ pub fn read_var_int(stream: &mut TcpStream) -> Result<u32, &'static str> {
        value |= ((buffer & SEGMENT_BITS) as u32) << (size * 7);
        size += 1;
        if size > 5 { return Err("something badding") };
-       buffer = read_bytes(stream, 1)[0];
+       buffer = read_next(stream);
    }
 
    return Ok((value | (((buffer & SEGMENT_BITS) as u32) << (size * 7))).into());
@@ -71,4 +74,37 @@ pub fn flush(stream: &mut TcpStream, data: &Vec<u8>, id: i32){
     buffer.extend(data_buffer);
 
     stream.write(&buffer).expect("couldn't flush data");
+}
+
+//currently borken
+pub fn _write_position(buffer: &mut Vec<u8>, x: i32, y: i32, z: i32) {
+    let pos = ((x as u64 & 0x3FFFFFF) << 38) | ((z as u64 & 0x3FFFFFF) << 12) | (y as u64  & 0xFFF);
+    buffer.push(pos.try_into().unwrap());
+}
+
+//currently borken
+pub fn _disconnect_player(players: &Vec<Player>, username: String){
+    for plr in players.iter() {
+        if plr.username == username { drop(plr) }
+    }
+}
+
+pub fn has_player(players: &Vec<Player>, username: String) -> bool {
+    for plr in players.into_iter() {
+        if plr.username == username { return true };
+    }
+    return false;
+}
+
+pub fn populate_players(players: &Vec<Player>) -> Vec<ServerPlayer> {
+    let mut plrs: Vec<ServerPlayer> = vec![];
+
+    if players.len() == 0 { return plrs };
+
+    for plr in players {
+        let player = ServerPlayer{ name: plr.username.clone(), id: plr.uuid.clone() };
+        plrs.push(player);
+    }
+
+    return plrs;
 }

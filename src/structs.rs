@@ -1,22 +1,17 @@
 extern crate serde;
 extern crate serde_json;
-use std::net::TcpStream;
 
-// Import this crate to derive the Serialize and Deserialize traits.
-
-#[derive(Serialize, Deserialize, Debug)]
+#[derive(Serialize, Deserialize, Debug, Clone)]
 pub struct Player {
     pub x: f64,
     pub y: f64,
     pub z: f64,
+    
+    pub yaw: f32,
+    pub pitch: f32,
 
     pub username: String,
     pub uuid: String,
-}
-
-pub struct OnlinePlayer {
-    pub player: Player,
-    pub stream: TcpStream,
 }
 
 #[derive(Serialize, Deserialize, Debug)]
