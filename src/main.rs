@@ -117,6 +117,8 @@ fn main() -> std::io::Result<()> {
                                     y: 90.0, 
                                     z: 8.0,
 
+                                    grounded: false,
+
                                     yaw: 0.0,
                                     pitch: 0.0,
 
@@ -309,14 +311,28 @@ fn main() -> std::io::Result<()> {
                                                 //plugin message
                                                 //println!("{}", String::from_utf8(reading).unwrap());
                                             }
-                                            19 => { 
-                                                //update move 
+                                            19 => {
+                                                player.x = f64::from_be_bytes(reading.drain(0..8).as_slice().try_into().unwrap());
+                                                player.y = f64::from_be_bytes(reading.drain(0..8).as_slice().try_into().unwrap());
+                                                player.z = f64::from_be_bytes(reading.drain(0..8).as_slice().try_into().unwrap());
+
+                                                player.grounded = true;
                                             }
                                             20 => { 
-                                                //update move and rot
+                                                player.x = f64::from_be_bytes(reading.drain(0..8).as_slice().try_into().unwrap());
+                                                player.y = f64::from_be_bytes(reading.drain(0..8).as_slice().try_into().unwrap());
+                                                player.z = f64::from_be_bytes(reading.drain(0..8).as_slice().try_into().unwrap());
+
+                                                player.yaw = f32::from_be_bytes(reading.drain(0..4).as_slice().try_into().unwrap());
+                                                player.pitch = f32::from_be_bytes(reading.drain(0..4).as_slice().try_into().unwrap());
+
+                                                player.grounded = true;
                                             }
                                             21 => { 
-                                                //update rot
+                                                player.yaw = f32::from_be_bytes(reading.drain(0..4).as_slice().try_into().unwrap());
+                                                player.pitch = f32::from_be_bytes(reading.drain(0..4).as_slice().try_into().unwrap());
+
+                                                player.grounded = true;
                                             }
                                             29 => { 
                                                 //sprint / sneak
