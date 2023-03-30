@@ -13,9 +13,8 @@ use std::fs::File;
 use std::path::Path;
 use std::sync::{Arc, Mutex};
 use std::{fs, thread };
-use std::io::{ Read, Write, Cursor };
+use std::io::{ Read, Write };
 use std::net::TcpListener;
-use byteorder::{BigEndian, ReadBytesExt};
 
 #[macro_use] extern crate serde_derive;
 
@@ -62,14 +61,12 @@ fn main() -> std::io::Result<()> {
 
                                 write_string(&mut buffer, serde_json::to_string(&status).unwrap());
                                 flush(&mut stream, &mut buffer, CStatusPacketid::Status as i32);
-                                buffer.clear();
                                 
                                 //check ping
                                 let handle = read_bytes(&mut stream, 8);
                                 buffer.extend(&handle);
                                 
                                 flush(&mut stream, &mut buffer, CStatusPacketid::Ping as i32);
-                                buffer.clear();
                             },
                             2 => {
                                 //user connecting
@@ -103,13 +100,12 @@ fn main() -> std::io::Result<()> {
                                 write_string(&mut buffer, username.clone());
                                 write_var_int(&mut buffer, 0);
                                 flush(&mut stream, &mut buffer, CLoginPacketid::Success as i32);
-                                buffer.clear();
 
                                 //has player played before? otherwise create new player
                                 let pathname: String = format!("./players/{}.bin", username.clone());
                                 let path: &Path = Path::new(&pathname);
 
-                                let mut player: Player = Player{
+                                let mut player: Player = Player {
                                     username: username.clone(), 
                                     uuid: Uuid::from_bytes(uuid.to_be_bytes()).to_string(),
                                     
@@ -117,40 +113,36 @@ fn main() -> std::io::Result<()> {
                                     y: 90.0, 
                                     z: 8.0,
 
-                                    grounded: false,
-
                                     yaw: 0.0,
                                     pitch: 0.0,
 
                                     gamemode: 0,
+
+                                    chunk_x: 0,
+                                    chunk_z: 0,
                                 };
 
                                 if path.exists() {
-                                    println!("aoegbaeogba");
                                     let mut file: File = fs::File::open(path).unwrap();
 
                                     file.read_to_end(&mut buffer).unwrap();
-                                    let mut crs = Cursor::new(&buffer);
-                                    player.x = crs.read_f64::<BigEndian>().unwrap();
-                                    player.y = crs.read_f64::<BigEndian>().unwrap();
-                                    player.z = crs.read_f64::<BigEndian>().unwrap();
+                                    player.x = f64::from_be_bytes(buffer.drain(0..8).as_slice().try_into().unwrap());
+                                    player.y = f64::from_be_bytes(buffer.drain(0..8).as_slice().try_into().unwrap());
+                                    player.z = f64::from_be_bytes(buffer.drain(0..8).as_slice().try_into().unwrap());
 
-                                    player.yaw = crs.read_f32::<BigEndian>().unwrap();
-                                    player.pitch = crs.read_f32::<BigEndian>().unwrap();
-                                    player.gamemode = crs.read_u8().unwrap();
+                                    player.yaw = f32::from_be_bytes(buffer.drain(0..4).as_slice().try_into().unwrap());
+                                    player.pitch = f32::from_be_bytes(buffer.drain(0..4).as_slice().try_into().unwrap());
+                                    player.gamemode = u8::from_be_bytes(buffer.drain(0..1).as_slice().try_into().unwrap());
                                     
                                     buffer.clear()
                                 } else {
                                     save_player(&player);
                                 }
 
-                                println!("{}", player.x.clone());
-
                                 //send play 
                                 let loginplay = PacketOutLoginPlay::new(0);
                                 PacketOutLoginPlay::serialize(&loginplay, &mut buffer);
                                 flush(&mut stream, &mut buffer, CPlayPacketid::LoginPlay as i32);
-                                buffer.clear();
                                 
                                 //update tab
                                 buffer.write(&[9]).unwrap();
@@ -159,28 +151,35 @@ fn main() -> std::io::Result<()> {
                                 write_string(&mut buffer, username);
                                 write_var_int(&mut buffer, 0);
                                 buffer.write(&[1]).unwrap();
-                                flush(&mut stream, &buffer, CPlayPacketid::PlayerInfo as i32);
-                                buffer.clear();
+                                flush(&mut stream, &mut buffer, CPlayPacketid::PlayerInfo as i32);
                                 
                                 //send default spawn
                                 let flytis: f32 = 0.0;
                                 write_position(&mut buffer, 8, 64, 8);
                                 buffer.write(&flytis.to_be_bytes()).unwrap();
                                 flush(&mut stream, &mut buffer, CPlayPacketid::SetDefaultSpawn as i32);
-                                buffer.clear();
 
                                 //teleport player
                                 let sync_player = SynchronizePlayerPosition::new(player.x, player.y, player.z, player.yaw, player.pitch, 0, false);
                                 SynchronizePlayerPosition::serialize(&sync_player, &mut buffer);
                                 flush(&mut stream, &mut buffer, CPlayPacketid::PlayerPos as i32);
-                                buffer.clear();
 
                                 //send one chunk
-                                let mut chunkdata = vec![];
+                                let mut chunk_data = vec![];
                                 let mut handle = fs::File::open("chunk.bin").unwrap();
-                                handle.read_to_end(&mut chunkdata).unwrap();
+                                handle.read_to_end(&mut chunk_data).unwrap();
                                 drop(handle);
-                                stream.write_all(&chunkdata).unwrap();
+
+                                for x in 0..7 {
+                                    for y in 0..7 {
+                                        let chunk_x: i32 = x - 3;
+                                        let chunk_z: i32 = y - 3;
+                                        buffer.extend(chunk_x.to_be_bytes());
+                                        buffer.extend(chunk_z.to_be_bytes());
+                                        buffer.extend(chunk_data.clone());
+                                        flush(&mut stream, &mut buffer, CPlayPacketid::LoadChunk as i32);
+                                    }
+                                }
 
                                 //push player to playerlist
                                 let mut players = players_accessor.lock().unwrap();
@@ -197,6 +196,8 @@ fn main() -> std::io::Result<()> {
                                     let mut lastkeepalive: u64 = 0;
 
                                     player.gamemode = 0;
+                                    player.chunk_x = 0;
+                                    player.chunk_z = 0; 
 
                                     loop {
                                         let size = read_var_int(&mut stream).unwrap();
@@ -216,17 +217,17 @@ fn main() -> std::io::Result<()> {
 
                                             let mut buffer: Vec<u8> = vec![];
                                             buffer.extend(lastkeepalive.to_be_bytes());
-                                            flush(&mut stream, &buffer, CPlayPacketid::KeepAlive as i32);
+                                            flush(&mut stream, &mut buffer, CPlayPacketid::KeepAlive as i32);
                                         }
 
-                                        let mut reading: Vec<u8> = vec![0; size.try_into().unwrap()];
-                                        stream.read(&mut reading).unwrap();
+                                        let mut data: Vec<u8> = vec![0; size.try_into().unwrap()];
+                                        stream.read(&mut data).unwrap();
 
-                                        let packetid = read_var_int_buf(&mut reading).unwrap();
+                                        let packetid = read_var_int_buf(&mut data).unwrap();
+                                        let mut handled = true;
                                         match packetid {
                                             4 => {
-                                                let stringlen = read_var_int_buf(&mut reading).unwrap();
-                                                let message = read_string_buf(&mut reading, stringlen as usize);
+                                                let message = read_string_buf(&mut data);
 
                                                 let args = message.split(" ").collect::<Vec<&str>>();
                                                 
@@ -256,7 +257,43 @@ fn main() -> std::io::Result<()> {
                                                         }
                                                         buffer.write(&[1,id.unwrap(),count.unwrap(),0]).unwrap();
                                                         buffer.write(&[0]).unwrap();
-                                                        flush(&mut stream, &buffer, CPlayPacketid::ContainerContent as i32);
+                                                        flush(&mut stream, &mut buffer, CPlayPacketid::ContainerContent as i32);
+                                                    }
+                                                    "gm" => {
+                                                        if args.len() < 2 {
+                                                            send_chat_message(&mut stream, "incorrect usage".to_string());
+                                                            continue;
+                                                        }
+
+                                                        let gamemode_handle: Result<u8, _> = args[1].parse();
+                                                        
+                                                        if gamemode_handle.is_err() {
+                                                            send_chat_message(&mut stream, "invalid gamemode number".to_string());
+                                                            continue;
+                                                        }
+
+                                                        let gamemode: f32 = gamemode_handle.unwrap() as f32;
+
+                                                        if gamemode > 3.0 {
+                                                            send_chat_message(&mut stream, "invalid gamemode number".to_string());
+                                                            continue;
+                                                        }
+
+                                                        let mut buffer = vec![];
+                                                        buffer.write(&[3]).unwrap();
+                                                        buffer.extend(gamemode.to_be_bytes());
+                                                        flush(&mut stream, &mut buffer, CPlayPacketid::GameEvent as i32);
+
+                                                        send_actionbar(&mut stream, format!("gamemode updated to {}", gamemode));
+                                                    }
+                                                    "respawn" => {
+                                                        player.x = 8.0;
+                                                        player.y = 80.0;
+                                                        player.z = 8.0;
+
+                                                        let sync_player = SynchronizePlayerPosition::from_player(&player, 0, false);
+                                                        SynchronizePlayerPosition::serialize(&sync_player, &mut buffer);
+                                                        flush(&mut stream, &mut buffer, CPlayPacketid::PlayerPos as i32);
                                                     }
                                                     _ => { 
                                                         send_chat_message(&mut stream, "command not found".to_string());
@@ -265,97 +302,77 @@ fn main() -> std::io::Result<()> {
                                                 }
                                             }
                                             5 => {
-                                                let stringlen = read_var_int_buf(&mut reading).unwrap();
-                                                let message = read_string_buf(&mut reading, stringlen as usize);
+                                                let message = read_string_buf(&mut data);
 
                                                 println!("{}: {}", player.username.clone(), message);
 
                                                 send_chat_message(&mut stream, format!("{}: {}", player.username.clone(), message));
+                                                handled = true;
                                             }
-                                            6 => {
-                                                //0x1C 
-                                                if player.gamemode == 0 {
-                                                    player.gamemode = 3;
-                                                } else {
-                                                    player.gamemode = 0;
-                                                }
-
-                                                let gamemode = player.gamemode as f32;
-                                                let mut buffer = vec![];
-                                                buffer.write(&[3]).unwrap();
-                                                buffer.extend(gamemode.to_be_bytes());
-                                                flush(&mut stream, &buffer, CPlayPacketid::GameEvent as i32);
+                                            12 => {
+                                                //let channel = read_string_buf(&mut data);
+                                                //println!("channel: {}, data: {:?}", channel, &data);
+                                                handled = true;
                                             }
                                             17 => {
-                                                if lastkeepalive == u64::from_be_bytes(reading.drain(0..8).as_slice().try_into().unwrap()) {
+                                                if lastkeepalive == u64::from_be_bytes(data.drain(0..8).as_slice().try_into().unwrap()) {
                                                     continue;
                                                 }
                                                 
                                                 let mut buffer: Vec<u8> = vec![];
                                                 write_string_chat(&mut buffer, "invalid keep-alive response".to_string());
-                                                flush(&mut stream, &buffer, CPlayPacketid::Kick as i32);
+                                                flush(&mut stream, &mut buffer, CPlayPacketid::Kick as i32);
 
                                                 let mut players = playersmutex.lock().unwrap();
                                                 disconnect_player(&mut players, player.username.clone());
                                                 drop(stream);
                                                 break;
                                             }
-                                            11 => {
-                                                let gamemode: f32 = 0.0;
-                                                let mut buffer = vec![];
-                                                buffer.write(&[3]).unwrap();
-                                                buffer.extend(gamemode.to_be_bytes());
-                                                flush(&mut stream, &buffer, CPlayPacketid::GameEvent as i32);
-                                            }
-                                            12 => {
-                                                //plugin message
-                                                //println!("{}", String::from_utf8(reading).unwrap());
-                                            }
                                             19 => {
-                                                player.x = f64::from_be_bytes(reading.drain(0..8).as_slice().try_into().unwrap());
-                                                player.y = f64::from_be_bytes(reading.drain(0..8).as_slice().try_into().unwrap());
-                                                player.z = f64::from_be_bytes(reading.drain(0..8).as_slice().try_into().unwrap());
+                                                player.x = f64::from_be_bytes(data.drain(0..8).as_slice().try_into().unwrap());
+                                                player.y = f64::from_be_bytes(data.drain(0..8).as_slice().try_into().unwrap());
+                                                player.z = f64::from_be_bytes(data.drain(0..8).as_slice().try_into().unwrap());
+                                                data.remove(0);
+                                                
+                                                let chunk_x = (player.x as i32) / 16;
+                                                let chunk_z = (player.z as i32) / 16;
 
-                                                player.grounded = true;
+                                                if chunk_x != player.chunk_x {
+                                                    player.chunk_x = chunk_x;
+                                                    player.chunk_z = chunk_z;
+
+                                                    write_var_int(&mut buffer, chunk_x);
+                                                    write_var_int(&mut buffer, chunk_z);
+                                                    flush(&mut stream, &mut buffer, CPlayPacketid::CenterChunk as i32); 
+                                                }
+                                                
                                             }
                                             20 => { 
-                                                player.x = f64::from_be_bytes(reading.drain(0..8).as_slice().try_into().unwrap());
-                                                player.y = f64::from_be_bytes(reading.drain(0..8).as_slice().try_into().unwrap());
-                                                player.z = f64::from_be_bytes(reading.drain(0..8).as_slice().try_into().unwrap());
+                                                player.x = f64::from_be_bytes(data.drain(0..8).as_slice().try_into().unwrap());
+                                                player.y = f64::from_be_bytes(data.drain(0..8).as_slice().try_into().unwrap());
+                                                player.z = f64::from_be_bytes(data.drain(0..8).as_slice().try_into().unwrap());
+                                                data.remove(0);
 
-                                                player.yaw = f32::from_be_bytes(reading.drain(0..4).as_slice().try_into().unwrap());
-                                                player.pitch = f32::from_be_bytes(reading.drain(0..4).as_slice().try_into().unwrap());
-
-                                                player.grounded = true;
+                                                player.yaw = f32::from_be_bytes(data.drain(0..4).as_slice().try_into().unwrap());
+                                                player.pitch = f32::from_be_bytes(data.drain(0..4).as_slice().try_into().unwrap());
                                             }
                                             21 => { 
-                                                player.yaw = f32::from_be_bytes(reading.drain(0..4).as_slice().try_into().unwrap());
-                                                player.pitch = f32::from_be_bytes(reading.drain(0..4).as_slice().try_into().unwrap());
-
-                                                player.grounded = true;
-                                            }
-                                            29 => { 
-                                                //sprint / sneak
-                                            }
-                                            33 => {
-                                                player.gamemode = 1;
-
-                                                let gamemode = player.gamemode as f32;
-                                                let mut buffer = vec![];
-                                                buffer.write(&[3]).unwrap();
-                                                buffer.extend(gamemode.to_be_bytes());
-                                                flush(&mut stream, &buffer, CPlayPacketid::GameEvent as i32);
-                                            }
-                                            47 => {
-                                                //break block
+                                                player.yaw = f32::from_be_bytes(data.drain(0..4).as_slice().try_into().unwrap());
+                                                player.pitch = f32::from_be_bytes(data.drain(0..4).as_slice().try_into().unwrap());
+                                                data.remove(0);
                                             }
                                             49 => {
                                                 //block interact
-                                                println!("packet {} [0x{:X}] {:?}", packetid, packetid, &reading);
+                                                println!("packet {} [0x{:X}] {:?}", packetid, packetid, &data);
                                             }
                                             _ => {
-                                                println!("unhandled packet {} [0x{:X}] {:?}", packetid, packetid, &reading);
+                                                println!("unhandled packet {} [0x{:X}] {:?}", packetid, packetid, &data);
+                                                handled = true;
                                             }
+                                        }
+
+                                        if !handled && data.len() > 0 {
+                                            println!("data left in packet {} [0x{:X}] {:?}", packetid, packetid, &data);
                                         }
 
                                         tick += 1;

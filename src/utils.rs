@@ -58,14 +58,14 @@ pub fn read_var_int_buf(buffer: &mut Vec<u8>) -> Result<u32, &'static str> {
 }
 
 pub fn read_string(stream: &mut TcpStream) -> String {
-    let stringlen = read_var_int(stream).unwrap();
-    let readed = read_bytes(stream, stringlen as usize);
+    let stringlen = read_var_int(stream).unwrap() as usize;
+    let readed = read_bytes(stream, stringlen);
     return String::from_utf8(readed).unwrap();
 }
 
-pub fn read_string_buf(stream: &mut Vec<u8>, length: usize) -> String {
-    let readed = stream.drain(0..length);
-    return String::from_utf8(readed.as_slice().to_vec()).unwrap();
+pub fn read_string_buf(buffer: &mut Vec<u8>) -> String {
+    let stringlen = read_var_int_buf(buffer).unwrap() as usize;
+    return String::from_utf8(buffer.drain(0..stringlen).as_slice().to_vec()).unwrap();
 }
 
 pub fn write_var_int(buffer: &mut Vec<u8>, value2: i32) {
@@ -101,30 +101,31 @@ pub fn write_string_chat(buffer: &mut Vec<u8>, string: String) {
     buffer.extend_from_slice(String::into_bytes(string2).as_slice())
 }
 
-pub fn flush(stream: &mut TcpStream, data: &Vec<u8>, id: i32) {
+pub fn flush(stream: &mut TcpStream, buffer: &mut Vec<u8>, id: i32) {
     let mut data_buffer: Vec<u8> = vec![];
     write_var_int(&mut data_buffer, id);
-    data_buffer.extend(data);
+    data_buffer.extend(buffer.clone());
 
-    let mut buffer: Vec<u8> = vec![];
-    write_var_int(&mut buffer, data_buffer.len() as i32);
-    buffer.extend(data_buffer);
+    let mut packet: Vec<u8> = vec![];
+    write_var_int(&mut packet, data_buffer.len() as i32);
+    packet.extend(data_buffer);
 
-    stream.write(&buffer).unwrap();
+    stream.write(&packet).unwrap();
+    buffer.clear();
 }
 
 pub fn send_chat_message(mut stream: &mut TcpStream, message: String){
     let mut buffer = vec![];
     write_string_chat(&mut buffer, message);
     buffer.write(&[0]).unwrap();
-    flush(&mut stream, &buffer, CPlayPacketid::Chat as i32);
+    flush(&mut stream, &mut buffer, CPlayPacketid::Chat as i32);
 }
 
 pub fn send_actionbar(mut stream: &mut TcpStream, message: String){
     let mut buffer = vec![];
     write_string_chat(&mut buffer, message);
-    buffer.write(&[0]).unwrap();
-    flush(&mut stream, &buffer, CPlayPacketid::Chat as i32);
+    buffer.write(&[1]).unwrap();
+    flush(&mut stream, &mut buffer, CPlayPacketid::Chat as i32);
 }
 
 pub fn write_position(buffer: &mut Vec<u8>, x: i32, y: i32, z: i32) {

@@ -1,6 +1,6 @@
 use std::{fs, io::Read};
 
-use crate::utils::{write_var_int, write_string};
+use crate::{utils::{write_var_int, write_string}, structs::Player};
 use std::io::Write;
 
 pub struct PacketOutLoginPlay {
@@ -51,8 +51,8 @@ impl PacketOutLoginPlay {
             dimension_name: "minecraft:overworld".to_string(), 
             hashed_seed: 5, 
             max_players: 20, 
-            view_distance: 5, 
-            simulation_distance: 5, 
+            view_distance: 16, 
+            simulation_distance: 16, 
             reduced_debug_info: false, 
             enable_respawn_screen: true, 
             debug: false, 
@@ -103,6 +103,10 @@ impl SynchronizePlayerPosition {
     pub fn new(x: f64, y: f64, z: f64, yaw: f32, pitch: f32, flags: u8, dismount: bool) -> SynchronizePlayerPosition {
         return SynchronizePlayerPosition { x, y, z, yaw, pitch, flags, dismount }
     }
+    
+    pub fn from_player(player: &Player, flags: u8, dismount: bool) -> SynchronizePlayerPosition {
+        return SynchronizePlayerPosition { x: player.x, y: player.y, z: player.z, yaw: player.yaw, pitch: player.pitch, flags, dismount }
+    }
 
     pub fn serialize(packet: &SynchronizePlayerPosition, buffer: &mut Vec<u8>){
         buffer.write(&packet.x.to_be_bytes()).unwrap();
@@ -111,7 +115,7 @@ impl SynchronizePlayerPosition {
         buffer.write(&packet.yaw.to_be_bytes()).unwrap();
         buffer.write(&packet.pitch.to_be_bytes()).unwrap();
         buffer.push(packet.flags);
-        write_var_int(buffer, 0);
+        write_var_int(buffer, 100);
         buffer.push(packet.dismount as u8);
     }
 }

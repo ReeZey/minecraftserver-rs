@@ -3,9 +3,11 @@ pub enum CPlayPacketid {
     ContainerContent = 0x10,
     GameEvent = 0x1C,
     KeepAlive = 0x1F,
+    LoadChunk = 0x20,
     LoginPlay = 0x24,
     PlayerInfo = 0x36,
     PlayerPos = 0x38,
+    CenterChunk = 0x4A,
     SetDefaultSpawn = 0x4C,
     Chat = 0x60,
 }
