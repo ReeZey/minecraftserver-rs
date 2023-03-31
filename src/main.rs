@@ -8,13 +8,13 @@ use utils::*;
 use packet_out::*;
 use packets::*;
 
-use uuid::Uuid;
 use std::fs::File;
 use std::path::Path;
+use std::sync::mpsc::channel;
 use std::sync::{Arc, Mutex};
 use std::{fs, thread };
 use std::io::{ Read, Write };
-use std::net::TcpListener;
+use std::net::{TcpListener, TcpStream, SocketAddr};
 
 #[macro_use] extern crate serde_derive;
 
@@ -25,7 +25,26 @@ fn main() -> std::io::Result<()> {
 
     let listener = TcpListener::bind("0.0.0.0:51413")?;
     let players: Vec<Player> = vec![];
+    let streams: Vec<TcpStream> = vec![];
     let players_accessor = Arc::new(Mutex::new(players));
+    let streams_accessor = Arc::new(Mutex::new(streams));
+
+    let mut entity_id = 0;
+
+    let (tx, rx) = channel();
+
+    let abc = streams_accessor.clone();
+    thread::spawn(move || {
+        loop {
+            let buffer: (Vec<u8>, i32, String) = rx.recv().unwrap();
+
+            for stream in abc.lock().unwrap().iter_mut() {
+                if stream.peer_addr().unwrap().to_string() == buffer.2 { continue; }
+                
+                flush(stream, &mut buffer.0.clone(), buffer.1);
+            }
+        }
+    });
 
     // accept incoming connections and process them serially
     Ok(for stream in listener.incoming() {
@@ -92,23 +111,17 @@ fn main() -> std::io::Result<()> {
                                 }
                                 drop(players);
 
-                                //println!("{} {} {}", username, uuid, has_guid);
-
-                                //player isn't currently playing, let him in!
-                                let mut buffer: Vec<u8> = vec![];
-                                buffer.extend(&uuid.to_be_bytes());
-                                write_string(&mut buffer, username.clone());
-                                write_var_int(&mut buffer, 0);
-                                flush(&mut stream, &mut buffer, CLoginPacketid::Success as i32);
+                                entity_id += 1;
 
                                 //has player played before? otherwise create new player
                                 let pathname: String = format!("./players/{}.bin", username.clone());
                                 let path: &Path = Path::new(&pathname);
-
+                                
                                 let mut player: Player = Player {
                                     username: username.clone(), 
-                                    uuid: Uuid::from_bytes(uuid.to_be_bytes()).to_string(),
-                                    
+                                    uuid: u128::from_be_bytes(uuid.to_be_bytes()),
+                                    entity_id,
+
                                     x: 8.0, 
                                     y: 90.0, 
                                     z: 8.0,
@@ -127,7 +140,7 @@ fn main() -> std::io::Result<()> {
 
                                     file.read_to_end(&mut buffer).unwrap();
                                     player.x = f64::from_be_bytes(buffer.drain(0..8).as_slice().try_into().unwrap());
-                                    player.y = f64::from_be_bytes(buffer.drain(0..8).as_slice().try_into().unwrap());
+                                    player.y = f64::from_be_bytes(buffer.drain(0..8).as_slice().try_into().unwrap()) + 1.0;
                                     player.z = f64::from_be_bytes(buffer.drain(0..8).as_slice().try_into().unwrap());
 
                                     player.yaw = f32::from_be_bytes(buffer.drain(0..4).as_slice().try_into().unwrap());
@@ -139,8 +152,20 @@ fn main() -> std::io::Result<()> {
                                     save_player(&player);
                                 }
 
+                                let mut buffer: Vec<u8> = vec![];
+
+                                let mut streams = streams_accessor.lock().unwrap();
+                                streams.push(stream.try_clone().unwrap());
+                                drop(streams);
+
+                                //player isn't currently playing, let him in!
+                                buffer.extend(&uuid.to_be_bytes());
+                                write_string(&mut buffer, username.clone());
+                                write_var_int(&mut buffer, 0);
+                                flush(&mut stream, &mut buffer, CLoginPacketid::Success as i32);
+
                                 //send play 
-                                let loginplay = PacketOutLoginPlay::new(0);
+                                let loginplay = PacketOutLoginPlay::new(entity_id);
                                 PacketOutLoginPlay::serialize(&loginplay, &mut buffer);
                                 flush(&mut stream, &mut buffer, CPlayPacketid::LoginPlay as i32);
                                 
@@ -151,8 +176,9 @@ fn main() -> std::io::Result<()> {
                                 write_string(&mut buffer, username);
                                 write_var_int(&mut buffer, 0);
                                 buffer.write(&[1]).unwrap();
+                                tx.send((buffer.clone(), CPlayPacketid::PlayerInfo as i32, stream.peer_addr().unwrap().to_string())).unwrap();
                                 flush(&mut stream, &mut buffer, CPlayPacketid::PlayerInfo as i32);
-                                
+
                                 //send default spawn
                                 let flytis: f32 = 0.0;
                                 write_position(&mut buffer, 8, 64, 8);
@@ -183,11 +209,44 @@ fn main() -> std::io::Result<()> {
 
                                 //push player to playerlist
                                 let mut players = players_accessor.lock().unwrap();
+                                for player in players.iter() {
+                                    buffer.write(&[9]).unwrap();
+                                    write_var_int(&mut buffer, 1);
+                                    buffer.extend(player.uuid.to_be_bytes());
+                                    write_string(&mut buffer, player.username.clone());
+                                    write_var_int(&mut buffer, 0);
+                                    buffer.write(&[1]).unwrap();
+                                    //tx.send((buffer.clone(), CPlayPacketid::PlayerInfo as i32, stream.peer_addr().unwrap().to_string())).unwrap();
+                                    flush(&mut stream, &mut buffer, CPlayPacketid::PlayerInfo as i32);
+                                    
+                                    write_var_int(&mut buffer, player.entity_id);
+                                    buffer.extend(player.uuid.to_be_bytes());
+                                    buffer.extend(player.x.to_be_bytes());
+                                    buffer.extend(player.y.to_be_bytes());
+                                    buffer.extend(player.z.to_be_bytes());
+                                    buffer.extend([0, 0]);
+                                    flush(&mut stream, &mut buffer, CPlayPacketid::SpawnPlayer as i32);
+                                }
                                 players.push(player.clone());
                                 drop(players);
+                                
+                                write_var_int(&mut buffer, entity_id);
+                                buffer.extend(player.uuid.to_be_bytes());
+                                buffer.extend(player.x.to_be_bytes());
+                                buffer.extend(player.y.to_be_bytes());
+                                buffer.extend(player.z.to_be_bytes());
+                                buffer.extend([0, 0]);
+                                tx.send((buffer.clone(), CPlayPacketid::SpawnPlayer as i32, stream.peer_addr().unwrap().to_string())).unwrap();
+                                buffer.clear();
+
+                                write_string_chat(&mut buffer, format!("{} joined the game", player.username.clone()));
+                                buffer.write(&[0]).unwrap();
+                                tx.send((buffer.clone(), CPlayPacketid::Chat as i32, stream.peer_addr().unwrap().to_string())).unwrap();
+                                buffer.clear();
 
                                 //create new thread, better solution required
                                 let playersmutex = players_accessor.clone();
+                                let tx = tx.clone();
                                 thread::spawn(move || {
                                     let players = playersmutex.lock().unwrap();
                                     println!("player {} connected, total: {}", player.username, players.len());
@@ -204,7 +263,23 @@ fn main() -> std::io::Result<()> {
                                         if size == 0 {
                                             let mut players = playersmutex.lock().unwrap();
                                             disconnect_player(&mut players, player.username.clone());
-                                            println!("player {} disconnected, total: {}", player.username, players.len());
+                                            println!("player {} disconnected, total: {}", player.username.clone(), players.len());
+
+                                            write_string_chat(&mut buffer, format!("{} left the game", player.username.clone()));
+                                            buffer.write(&[0]).unwrap();
+                                            tx.send((buffer.clone(), CPlayPacketid::Chat as i32, stream.peer_addr().unwrap().to_string())).unwrap();
+                                            buffer.clear();
+
+                                            write_var_int(&mut buffer, 1);
+                                            buffer.extend(player.uuid.to_be_bytes());
+                                            tx.send((buffer.clone(), CPlayPacketid::PlayerLeft as i32, stream.peer_addr().unwrap().to_string())).unwrap();
+                                            buffer.clear();
+
+                                            write_var_int(&mut buffer, 1);
+                                            write_var_int(&mut buffer, player.entity_id);
+                                            tx.send((buffer.clone(), CPlayPacketid::RemoveEntities as i32, stream.peer_addr().unwrap().to_string())).unwrap();
+                                            buffer.clear();
+
                                             save_player(&player);
                                             break; 
                                         }
@@ -291,6 +366,9 @@ fn main() -> std::io::Result<()> {
                                                         player.y = 80.0;
                                                         player.z = 8.0;
 
+                                                        player.yaw = 0.0;
+                                                        player.pitch = 0.0;
+
                                                         let sync_player = SynchronizePlayerPosition::from_player(&player, 0, false);
                                                         SynchronizePlayerPosition::serialize(&sync_player, &mut buffer);
                                                         flush(&mut stream, &mut buffer, CPlayPacketid::PlayerPos as i32);
@@ -305,8 +383,14 @@ fn main() -> std::io::Result<()> {
                                                 let message = read_string_buf(&mut data);
 
                                                 println!("{}: {}", player.username.clone(), message);
+                                                let chatmsg = format!("{}: {}", player.username.clone(), message);
 
-                                                send_chat_message(&mut stream, format!("{}: {}", player.username.clone(), message));
+                                                let mut buffer = vec![];
+                                                write_string_chat(&mut buffer, chatmsg);
+                                                buffer.write(&[0]).unwrap();
+
+                                                tx.send((buffer.clone(), CPlayPacketid::Chat as i32, stream.peer_addr().unwrap().to_string())).unwrap();
+                                                flush(&mut stream, &mut buffer, CPlayPacketid::Chat as i32);
                                                 handled = true;
                                             }
                                             12 => {
@@ -333,20 +417,17 @@ fn main() -> std::io::Result<()> {
                                                 player.y = f64::from_be_bytes(data.drain(0..8).as_slice().try_into().unwrap());
                                                 player.z = f64::from_be_bytes(data.drain(0..8).as_slice().try_into().unwrap());
                                                 data.remove(0);
-                                                
-                                                let chunk_x = (player.x as i32) / 16;
-                                                let chunk_z = (player.z as i32) / 16;
 
-                                                if chunk_x != player.chunk_x {
-                                                    player.chunk_x = chunk_x;
-                                                    player.chunk_z = chunk_z;
-
-                                                    write_var_int(&mut buffer, chunk_x);
-                                                    write_var_int(&mut buffer, chunk_z);
-                                                    flush(&mut stream, &mut buffer, CPlayPacketid::CenterChunk as i32); 
-                                                }
-                                                
-                                            }
+                                                write_var_int(&mut buffer, player.entity_id);
+                                                buffer.extend(player.x.to_be_bytes());
+                                                buffer.extend(player.y.to_be_bytes());
+                                                buffer.extend(player.z.to_be_bytes());
+                                                buffer.extend([0]);
+                                                buffer.extend([0]);
+                                                buffer.extend([1]);
+                                                tx.send((buffer.clone(), CPlayPacketid::PlayerTeleport as i32, stream.peer_addr().unwrap().to_string())).unwrap();
+                                                buffer.clear();
+                                            }  
                                             20 => { 
                                                 player.x = f64::from_be_bytes(data.drain(0..8).as_slice().try_into().unwrap());
                                                 player.y = f64::from_be_bytes(data.drain(0..8).as_slice().try_into().unwrap());
@@ -355,11 +436,55 @@ fn main() -> std::io::Result<()> {
 
                                                 player.yaw = f32::from_be_bytes(data.drain(0..4).as_slice().try_into().unwrap());
                                                 player.pitch = f32::from_be_bytes(data.drain(0..4).as_slice().try_into().unwrap());
+
+                                                write_var_int(&mut buffer, player.entity_id);
+                                                buffer.extend(player.x.to_be_bytes());
+                                                buffer.extend(player.y.to_be_bytes());
+                                                buffer.extend(player.z.to_be_bytes());
+                                                buffer.extend([0]);
+                                                buffer.extend([0]);
+                                                buffer.extend([1]);
+                                                tx.send((buffer.clone(), CPlayPacketid::PlayerTeleport as i32, stream.peer_addr().unwrap().to_string())).unwrap();
+                                                buffer.clear();
                                             }
                                             21 => { 
                                                 player.yaw = f32::from_be_bytes(data.drain(0..4).as_slice().try_into().unwrap());
                                                 player.pitch = f32::from_be_bytes(data.drain(0..4).as_slice().try_into().unwrap());
                                                 data.remove(0);
+
+                                                write_var_int(&mut buffer, player.entity_id);
+                                                buffer.extend(player.x.to_be_bytes());
+                                                buffer.extend(player.y.to_be_bytes());
+                                                buffer.extend(player.z.to_be_bytes());
+                                                buffer.extend([0]);
+                                                buffer.extend([0]);
+                                                buffer.extend([1]);
+                                                tx.send((buffer.clone(), CPlayPacketid::PlayerTeleport as i32, stream.peer_addr().unwrap().to_string())).unwrap();
+                                                buffer.clear();
+                                            }
+                                            28 => {
+                                                let status = read_var_int_buf(&mut data).unwrap();
+                                                let (x,y,z) = read_position(&mut data);
+                                                data.remove(0); // face
+                                                let seq = read_var_int_buf(&mut data);
+
+                                                
+                                                match status {
+                                                    2 => {
+                                                        //send_chat_message(&mut stream, format!("{:?}", position));
+                                                        write_position(&mut buffer, x, y, z);
+                                                        write_var_int(&mut buffer, 0);
+                                                        tx.send((buffer.clone(), CPlayPacketid::BlockUpdate as i32, stream.peer_addr().unwrap().to_string())).unwrap();
+                                                        flush(&mut stream, &mut buffer, CPlayPacketid::BlockUpdate as i32);
+                                                    }
+                                                    _ => {}
+                                                }
+                                            }
+                                            47 => {
+                                                write_var_int(&mut buffer, player.entity_id);
+                                                buffer.extend([0]);
+                                                tx.send((buffer.clone(), CPlayPacketid::SwingArm as i32, stream.peer_addr().unwrap().to_string())).unwrap();
+                                                buffer.clear();
                                             }
                                             49 => {
                                                 //block interact

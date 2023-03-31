@@ -4,7 +4,8 @@ extern crate serde_json;
 #[derive(Serialize, Deserialize, Debug, Clone)]
 pub struct Player {
     pub username: String,
-    pub uuid: String,
+    pub uuid: u128,
+    pub entity_id: i32,
 
     pub x: f64,
     pub y: f64,

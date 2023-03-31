@@ -3,6 +3,8 @@ use std::{
     net::TcpStream, path::Path, fs,
 };
 
+use uuid::Uuid;
+
 use crate::{structs::{Player, StatusPlayers}, packets::*};
 
 const SEGMENT_BITS: u8 = 0x7F;
@@ -110,8 +112,9 @@ pub fn flush(stream: &mut TcpStream, buffer: &mut Vec<u8>, id: i32) {
     write_var_int(&mut packet, data_buffer.len() as i32);
     packet.extend(data_buffer);
 
-    stream.write(&packet).unwrap();
+    let handle = stream.write(&packet);
     buffer.clear();
+    if handle.is_err() { drop(stream) };
 }
 
 pub fn send_chat_message(mut stream: &mut TcpStream, message: String){
@@ -131,6 +134,19 @@ pub fn send_actionbar(mut stream: &mut TcpStream, message: String){
 pub fn write_position(buffer: &mut Vec<u8>, x: i32, y: i32, z: i32) {
     let pos = ((x as u64 & 0x3FFFFFF) << 38) | ((z as u64 & 0x3FFFFFF) << 12) | (y as u64 & 0xFFF);
     buffer.extend(pos.to_be_bytes());
+}
+
+pub fn read_position(buffer: &mut Vec<u8>) -> (i32, i32, i32) {
+    let readpos = u64::from_be_bytes(buffer.drain(0..8).as_slice().try_into().unwrap());
+    let mut x = (readpos >> 38) as i32;
+    let mut y = (readpos << 52 >> 52) as i32;
+    let mut z = (readpos << 26 >> 38) as i32;
+
+    if x >= 1 << 25 { x -= 1 << 26 }
+    if y >= 1 << 11 { y -= 1 << 12 }
+    if z >= 1 << 25 { z -= 1 << 26 }
+
+    return (x,y,z);
 }
 
 pub fn disconnect_player(players: &mut Vec<Player>, username: String) {
@@ -163,7 +179,7 @@ pub fn populate_players(players: &Vec<Player>) -> Vec<StatusPlayers> {
     for plr in players {
         let player = StatusPlayers {
             name: plr.username.clone(),
-            id: plr.uuid.clone(),
+            id: Uuid::from_bytes(plr.uuid.to_be_bytes()).to_string(),
         };
         plrs.push(player);
     }
