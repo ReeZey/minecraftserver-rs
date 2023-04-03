@@ -16,8 +16,9 @@ pub enum CPlayPacketid {
     PlayerLeft = 0x35,
     PlayerInfo = 0x36,
     PlayerPos = 0x38,
-    CenterChunk = 0x4A,
+    _CenterChunk = 0x4A,
     SetDefaultSpawn = 0x4C,
+    EntityMetadata = 0x4E,
     Chat = 0x60,
     PlayerTeleport = 0x64,
 }

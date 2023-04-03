@@ -179,7 +179,7 @@ pub fn has_player(players: &Vec<Player>, username: &String) -> bool {
     return false;
 }
 
-pub fn get_player(players: &Vec<Player>, username: &String) -> Option<Player> {
+pub fn _get_player(players: &Vec<Player>, username: &String) -> Option<Player> {
     for plr in players.iter() {
         if plr.username == *username {
             return Some(plr.clone());

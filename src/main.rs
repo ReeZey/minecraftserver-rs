@@ -460,11 +460,33 @@ fn main() -> std::io::Result<()> {
 
                                                 let mut buffer = vec![];
                                                 write_string_chat(&mut buffer, &chatmsg);
-                                                buffer.write(&[0]).unwrap();
+                                                buffer.push(0);
 
                                                 broadcast(&tx, buffer.clone(), CPlayPacketid::Chat as i32, &stream);
                                                 flush(&mut stream, &mut buffer, CPlayPacketid::Chat as i32);
                                                 handled = true;
+                                            }
+                                            7 => {
+                                                let _locale = read_string_buf(&mut data);
+                                                let _view_distance: i8 = data.remove(0) as i8;
+                                                let _chat_mode = read_var_int_buf(&mut data).unwrap();
+                                                let _char_colors = data.remove(0);
+                                                let skin_parts = data.remove(0);
+                                                let _main_hand = read_var_int_buf(&mut data).unwrap();
+                                                let _text_filtering = data.remove(0);
+                                                let _allow_server_listening = data.remove(0);
+
+                                                let mut buffer: Vec<u8> = vec![];
+                                                write_var_int(&mut buffer, entity_id as i32);
+
+                                                buffer.push(17);
+                                                write_var_int(&mut buffer, 0);
+                                                buffer.push(skin_parts);
+
+                                                buffer.push(0xff);
+                                                
+                                                broadcast(&tx, buffer.clone(), CPlayPacketid::EntityMetadata as i32, &stream);
+                                                flush(&mut stream, &mut buffer, CPlayPacketid::EntityMetadata as i32);
                                             }
                                             12 => {
                                                 //let channel = read_string_buf(&mut data);
@@ -565,7 +587,7 @@ fn main() -> std::io::Result<()> {
                                                 let status = read_var_int_buf(&mut data).unwrap();
                                                 let (x,y,z) = read_position(&mut data);
                                                 data.remove(0); // face
-                                                let seq = read_var_int_buf(&mut data);
+                                                let _seq = read_var_int_buf(&mut data);
 
                                                 
                                                 match status {
@@ -583,7 +605,34 @@ fn main() -> std::io::Result<()> {
                                             29 => {
                                                 let entity_id = read_var_int_buf(&mut data).unwrap();
                                                 let action = read_var_int_buf(&mut data).unwrap();
-                                                let jump_boost = read_var_int_buf(&mut data).unwrap();
+                                                let _jump_boost = read_var_int_buf(&mut data).unwrap();
+
+                                                let mut buffer: Vec<u8> = vec![];
+                                                write_var_int(&mut buffer, entity_id as i32);
+
+                                                if (action & 1) == 0 {
+                                                    buffer.push(0);
+                                                    write_var_int(&mut buffer, 0);
+                                                    buffer.push(2);
+
+                                                    buffer.push(6);
+                                                    write_var_int(&mut buffer, 19);
+                                                    write_var_int(&mut buffer, 5);
+
+                                                    buffer.push(0xff);
+                                                    broadcast(&tx, buffer, CPlayPacketid::EntityMetadata as i32, &stream);
+                                                }else if (action & 0) == 0 {
+                                                    buffer.push(0);
+                                                    write_var_int(&mut buffer, 0);
+                                                    buffer.push(0);
+
+                                                    buffer.push(6);
+                                                    write_var_int(&mut buffer, 19);
+                                                    write_var_int(&mut buffer, 0);
+
+                                                    buffer.push(0xff);
+                                                    broadcast(&tx, buffer, CPlayPacketid::EntityMetadata as i32, &stream);
+                                                }
                                             }
                                             47 => {
                                                 let mut buffer = vec![];
