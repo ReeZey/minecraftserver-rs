@@ -13,11 +13,14 @@ pub struct Player {
     
     pub yaw: f32,
     pub pitch: f32,
-
-    pub chunk_x: i32,
-    pub chunk_z: i32,
-
+    
     pub gamemode: u8,
+}
+
+pub struct Broadcast {
+    pub data: Vec<u8>, 
+    pub packet_id: i32, 
+    pub stream_name: String
 }
 
 #[derive(Serialize, Deserialize, Debug)]

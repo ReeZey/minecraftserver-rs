@@ -1,11 +1,11 @@
 use std::{
     io::{Read, Write},
-    net::TcpStream, path::Path, fs,
+    net::TcpStream, path::Path, fs, sync::mpsc::Sender,
 };
 
 use uuid::Uuid;
 
-use crate::{structs::{Player, StatusPlayers}, packets::*};
+use crate::{structs::{Player, StatusPlayers, Broadcast}, packets::*};
 
 const SEGMENT_BITS: u8 = 0x7F;
 const CONTINUE_BIT: u8 = 0x80;
@@ -97,7 +97,7 @@ pub fn write_string(buffer: &mut Vec<u8>, string: String) {
     buffer.extend_from_slice(String::into_bytes(string).as_slice())
 }
 
-pub fn write_string_chat(buffer: &mut Vec<u8>, string: String) {
+pub fn write_string_chat(buffer: &mut Vec<u8>, string: &String) {
     let string2 = format!("{{\"text\":\"{string}\"}}");
     write_var_int(buffer, string2.len() as i32);
     buffer.extend_from_slice(String::into_bytes(string2).as_slice())
@@ -119,14 +119,14 @@ pub fn flush(stream: &mut TcpStream, buffer: &mut Vec<u8>, id: i32) {
 
 pub fn send_chat_message(mut stream: &mut TcpStream, message: String){
     let mut buffer = vec![];
-    write_string_chat(&mut buffer, message);
+    write_string_chat(&mut buffer, &message);
     buffer.write(&[0]).unwrap();
     flush(&mut stream, &mut buffer, CPlayPacketid::Chat as i32);
 }
 
 pub fn send_actionbar(mut stream: &mut TcpStream, message: String){
     let mut buffer = vec![];
-    write_string_chat(&mut buffer, message);
+    write_string_chat(&mut buffer, &message);
     buffer.write(&[1]).unwrap();
     flush(&mut stream, &mut buffer, CPlayPacketid::Chat as i32);
 }
@@ -134,6 +134,16 @@ pub fn send_actionbar(mut stream: &mut TcpStream, message: String){
 pub fn write_position(buffer: &mut Vec<u8>, x: i32, y: i32, z: i32) {
     let pos = ((x as u64 & 0x3FFFFFF) << 38) | ((z as u64 & 0x3FFFFFF) << 12) | (y as u64 & 0xFFF);
     buffer.extend(pos.to_be_bytes());
+}
+
+pub fn broadcast(tx: &Sender<Broadcast>, buffer: Vec<u8>, packet_id: i32, stream: &TcpStream){
+    let broacast = Broadcast {
+        data: buffer,
+        packet_id,
+        stream_name: stream.peer_addr().unwrap().to_string()
+    };
+    
+    tx.send(broacast).unwrap();
 }
 
 pub fn read_position(buffer: &mut Vec<u8>) -> (i32, i32, i32) {
@@ -149,10 +159,10 @@ pub fn read_position(buffer: &mut Vec<u8>) -> (i32, i32, i32) {
     return (x,y,z);
 }
 
-pub fn disconnect_player(players: &mut Vec<Player>, username: String) {
+pub fn disconnect_player(players: &mut Vec<Player>, username: &String) {
     let mut index = 0;
     for plr in players.iter() {
-        if plr.username == username {
+        if plr.username == *username {
             players.remove(index);
             break;
         }
@@ -160,13 +170,23 @@ pub fn disconnect_player(players: &mut Vec<Player>, username: String) {
     }
 }
 
-pub fn has_player(players: &Vec<Player>, username: String) -> bool {
-    for plr in players.into_iter() {
-        if plr.username == username {
+pub fn has_player(players: &Vec<Player>, username: &String) -> bool {
+    for plr in players.iter() {
+        if plr.username == *username {
             return true;
         };
     }
     return false;
+}
+
+pub fn get_player(players: &Vec<Player>, username: &String) -> Option<Player> {
+    for plr in players.iter() {
+        if plr.username == *username {
+            return Some(plr.clone());
+        };
+    }
+
+    None
 }
 
 pub fn populate_players(players: &Vec<Player>) -> Vec<StatusPlayers> {
