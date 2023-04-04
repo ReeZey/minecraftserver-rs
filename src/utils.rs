@@ -1,8 +1,8 @@
 use std::{
-    io::{Read, Write},
-    net::TcpStream, path::Path, fs, sync::mpsc::Sender,
+    io::Write, path::Path, fs, sync::mpsc::Sender,
 };
 
+use tokio::{net::TcpStream, io::{AsyncReadExt, AsyncWriteExt}};
 use uuid::Uuid;
 
 use crate::{structs::{Player, StatusPlayers, Broadcast}, packets::*};
@@ -10,34 +10,43 @@ use crate::{structs::{Player, StatusPlayers, Broadcast}, packets::*};
 const SEGMENT_BITS: u8 = 0x7F;
 const CONTINUE_BIT: u8 = 0x80;
 
-pub fn read_next(stream: &mut TcpStream) -> u8 {
-    let mut buf = [0; 1];
-    let handle = stream.read_exact(&mut buf);
-    if handle.is_err() { drop(stream) }
-    return buf[0];
+pub async fn read_next(stream: &mut TcpStream) -> Option<u8> {
+    let _n = match stream.read_u8().await {
+        Ok(n) => return Some(n),
+        Err(e) => {
+            eprintln!("failed to read from socket; err = {:?}", e);
+            return None;
+        }
+    };
 }
 
-pub fn read_bytes(stream: &mut TcpStream, length: usize) -> Vec<u8> {
+pub async fn read_bytes(stream: &mut TcpStream, length: usize) -> Option<Vec<u8>> {
     let mut arr = vec![0; length];
-    stream.read(&mut arr).unwrap();
-    return arr;
+
+    match stream.read(&mut arr).await {
+        Ok(_) => return Some(arr),
+        Err(e) => {
+            eprintln!("failed to read from socket; err = {:?}", e);
+            return None;
+        }
+    };
 }
 
-pub fn read_var_int(stream: &mut TcpStream) -> Result<u32, &'static str> {
+pub async fn read_var_int(stream: &mut TcpStream) -> Option<u32> {
     let mut value: u32 = 0;
     let mut size: u32 = 0;
-    let mut current_byte: u8 = read_next(stream);
+    let mut current_byte = read_next(stream).await?;
 
     while (current_byte & CONTINUE_BIT) == CONTINUE_BIT {
         value |= ((current_byte & SEGMENT_BITS) as u32) << (size * 7);
         size += 1;
         if size > 5 {
-            return Err("something badding");
+            return None;
         };
-        current_byte = read_next(stream);
+        current_byte = read_next(stream).await?;
     }
 
-    return Ok((value | (((current_byte & SEGMENT_BITS) as u32) << (size * 7))).into());
+    return Some((value | (((current_byte & SEGMENT_BITS) as u32) << (size * 7))).into());
 }
 
 pub fn read_var_int_buf(buffer: &mut Vec<u8>) -> Result<u32, &'static str> {
@@ -59,10 +68,10 @@ pub fn read_var_int_buf(buffer: &mut Vec<u8>) -> Result<u32, &'static str> {
     return Ok((value | (((current_byte & SEGMENT_BITS) as u32) << (size * 7))).into());
 }
 
-pub fn read_string(stream: &mut TcpStream) -> String {
-    let stringlen = read_var_int(stream).unwrap() as usize;
-    let readed = read_bytes(stream, stringlen);
-    return String::from_utf8(readed).unwrap();
+pub async fn read_string(stream: &mut TcpStream) -> Option<String> {
+    let stringlen = read_var_int(stream).await? as usize;
+    let readed = read_bytes(stream, stringlen).await?;
+    return Some(String::from_utf8(readed).unwrap());
 }
 
 pub fn read_string_buf(buffer: &mut Vec<u8>) -> String {
@@ -103,7 +112,7 @@ pub fn write_string_chat(buffer: &mut Vec<u8>, string: &String) {
     buffer.extend_from_slice(String::into_bytes(string2).as_slice())
 }
 
-pub fn flush(stream: &mut TcpStream, buffer: &mut Vec<u8>, id: i32) {
+pub async fn flush(stream: &mut TcpStream, buffer: &mut Vec<u8>, id: i32) {
     let mut data_buffer: Vec<u8> = vec![];
     write_var_int(&mut data_buffer, id);
     data_buffer.extend(buffer.clone());
@@ -112,23 +121,22 @@ pub fn flush(stream: &mut TcpStream, buffer: &mut Vec<u8>, id: i32) {
     write_var_int(&mut packet, data_buffer.len() as i32);
     packet.extend(data_buffer);
 
-    let handle = stream.write(&packet);
+    stream.write_all(&packet).await.unwrap();
     buffer.clear();
-    if handle.is_err() { drop(stream) };
 }
 
-pub fn send_chat_message(mut stream: &mut TcpStream, message: String){
+pub async fn send_chat_message(mut stream: &mut TcpStream, message: String){
     let mut buffer = vec![];
     write_string_chat(&mut buffer, &message);
-    buffer.write(&[0]).unwrap();
-    flush(&mut stream, &mut buffer, CPlayPacketid::Chat as i32);
+    buffer.push(0);
+    flush(&mut stream, &mut buffer, CPlayPacketid::Chat as i32).await;
 }
 
-pub fn send_actionbar(mut stream: &mut TcpStream, message: String){
+pub async fn send_actionbar(mut stream: &mut TcpStream, message: String){
     let mut buffer = vec![];
     write_string_chat(&mut buffer, &message);
-    buffer.write(&[1]).unwrap();
-    flush(&mut stream, &mut buffer, CPlayPacketid::Chat as i32);
+    buffer.push(1);
+    flush(&mut stream, &mut buffer, CPlayPacketid::Chat as i32).await;
 }
 
 pub fn write_position(buffer: &mut Vec<u8>, x: i32, y: i32, z: i32) {

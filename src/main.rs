@@ -3,25 +3,269 @@ mod structs;
 mod packet_out;
 mod packets;
 
-use structs::*;
-use utils::*;
 use packet_out::*;
 use packets::*;
-
-use std::fs::File;
-use std::path::Path;
-use std::sync::mpsc::channel;
-use std::sync::{Arc, Mutex};
-use std::{fs, thread };
-use std::io::{ Read, Write };
-use std::net::{TcpListener, TcpStream};
+use tokio::io::AsyncWriteExt;
+use utils::*;
+use structs::*;
 
 #[macro_use] extern crate serde_derive;
 
-fn main() -> std::io::Result<()> {
+use std::io::Read;
+use std::sync::mpsc::channel;
+use std::time::Duration;
+use std::{fs, sync::Arc};
+use std::path::Path;
+
+use tokio::{io::AsyncReadExt, sync::Mutex};
+
+use tokio::net::{TcpListener, TcpStream};
+use utils::read_var_int;
+
+#[tokio::main]
+async fn main() -> Result<(), Box<dyn std::error::Error>> {
     if !Path::new("players").is_dir() {
         fs::create_dir("players").unwrap();
     }
+
+    let entity_id = 0;
+
+    let players: Vec<Player> = vec![];
+    let streams: Vec<TcpStream> = vec![];
+
+    let players_accessor = Arc::new(Mutex::new(players));
+    let streams_accessor = Arc::new(Mutex::new(streams));
+    let entity_accessor = Arc::new(Mutex::new(entity_id));
+
+    let listener = TcpListener::bind("0.0.0.0:51413").await?;
+
+    let (tx, rx) = channel();
+
+    let abc = streams_accessor.clone();
+    tokio::spawn(async move {
+        loop {
+            let broadcast: Broadcast = rx.recv().unwrap();
+
+            let mut streams = abc.lock().await;
+            let mut_iter = streams.iter_mut();
+
+            for stream in mut_iter {
+                if stream.peer_addr().unwrap().to_string() == broadcast.stream_name { continue; }
+                
+                flush(stream, &mut broadcast.data.clone(), broadcast.packet_id).await;
+            }
+        }
+    });
+
+    loop {
+        let (mut stream, _) = listener.accept().await?;
+        let tx = tx.clone();
+
+        let players_accessor = players_accessor.clone();
+        let entity_accessor = entity_accessor.clone();
+        let streams_accessor = streams_accessor.clone();
+
+        tokio::spawn(async move {
+            let _length = read_var_int(&mut stream).await;
+            let packet_id = read_var_int(&mut stream).await.unwrap();
+
+            match packet_id {
+                0 => {
+                    let mut buffer: Vec<u8> = vec![];
+                    let _version = read_var_int(&mut stream).await.unwrap();
+                    let _address = read_string(&mut stream).await.unwrap();
+                    let _port = stream.read_u16().await.unwrap();
+                    let nextstate = read_var_int(&mut stream).await.unwrap();
+
+                    match nextstate {
+                        1 => {
+                            let players = players_accessor.lock().await;
+                            //send status
+                            let status = ServerStatus {
+                                version: StatusVersion { name: "1.19.3".to_string(), protocol: 761 },
+                                players: StatusPlayerCount { max: 20, online: players.len() as i32, sample: populate_players(&players) },
+                                description: StatusDescription { text: "hello aa".to_string() },
+                                enforces_secure_chat: false,
+                            };
+                            drop(players);
+
+                            write_string(&mut buffer, serde_json::to_string(&status).unwrap());
+                            flush(&mut stream, &mut buffer, CStatusPacketid::Status as i32).await;
+                            
+                            //check ping
+                            let handle = stream.read_i64().await.unwrap();
+                            buffer.extend(handle.to_be_bytes());
+                            
+                            flush(&mut stream, &mut buffer, CStatusPacketid::Ping as i32).await;
+                            drop(stream);
+                            return;
+                        },
+                        2 => {
+                            let _connectionid = read_var_int(&mut stream).await.unwrap();
+                            let _identifier = read_var_int(&mut stream).await.unwrap();
+
+                            let username = read_string(&mut stream).await.unwrap();
+
+                            let mut uuid: u128 = 0;
+                            let has_guid = read_next(&mut stream).await.unwrap();
+                            if has_guid == 1 {
+                                let array = read_bytes(&mut stream, 16).await.unwrap();
+                                uuid = u128::from_be_bytes(array.as_slice().try_into().unwrap());
+                            }
+
+                            let players = players_accessor.lock().await;
+                            //allow user if not playing
+                            if has_player(&players, &username) {
+                                let mut buffer: Vec<u8> = vec![];
+                                write_string_chat(&mut buffer, &"You are already connected to this server!".to_string());
+                                flush(&mut stream, &mut buffer, CLoginPacketid::Kick as i32).await;
+                                return;
+                            }
+                            drop(players);
+
+                            let mut entity_id = entity_accessor.lock().await;
+                            *entity_id += 1;
+
+                            //has player played before? otherwise create new player
+                            let pathname: String = format!("./players/{}.bin", username);
+                            let path: &Path = Path::new(&pathname);
+                            
+                            let mut player: Player = Player {
+                                username: username.clone(), 
+                                uuid: u128::from_be_bytes(uuid.to_be_bytes()),
+                                entity_id: *entity_id,
+
+                                x: 8.0, 
+                                y: 90.0, 
+                                z: 8.0,
+
+                                yaw: 0.0,
+                                pitch: 0.0,
+
+                                gamemode: 0
+                            };
+                            drop(entity_id);
+                            
+                            if path.exists() {
+                                let mut file = fs::File::open(path).unwrap();
+
+                                file.read_to_end(&mut buffer).unwrap();
+                                player.x = f64::from_be_bytes(buffer.drain(0..8).as_slice().try_into().unwrap());
+                                player.y = f64::from_be_bytes(buffer.drain(0..8).as_slice().try_into().unwrap());
+                                player.z = f64::from_be_bytes(buffer.drain(0..8).as_slice().try_into().unwrap());
+
+                                player.yaw = f32::from_be_bytes(buffer.drain(0..4).as_slice().try_into().unwrap());
+                                player.pitch = f32::from_be_bytes(buffer.drain(0..4).as_slice().try_into().unwrap());
+                                
+                                player.gamemode = u8::from_be_bytes(buffer.drain(0..1).as_slice().try_into().unwrap());
+                                
+                                buffer.clear()
+                            } else {
+                                save_player(&player);
+                            }
+
+                            let mut buffer: Vec<u8> = vec![];
+
+                            //player isn't currently playing, let him in!
+                            buffer.extend(&uuid.to_be_bytes());
+                            write_string(&mut buffer, username.clone());
+                            write_var_int(&mut buffer, 0);
+                            flush(&mut stream, &mut buffer, CLoginPacketid::Success as i32).await;
+
+                            //send play 
+                            let loginplay = PacketOutLoginPlay::new(player.entity_id);
+                            PacketOutLoginPlay::serialize(&loginplay, &mut buffer);
+                            flush(&mut stream, &mut buffer, CPlayPacketid::LoginPlay as i32).await;
+                            
+                            //update tab
+                            buffer.push(9);
+                            write_var_int(&mut buffer, 1);
+                            buffer.extend(uuid.to_be_bytes());
+                            write_string(&mut buffer, username);
+                            write_var_int(&mut buffer, 0);
+                            buffer.push(1);
+                            broadcast(&tx, buffer.clone(), CPlayPacketid::PlayerInfo as i32, &stream);
+                            flush(&mut stream, &mut buffer, CPlayPacketid::PlayerInfo as i32).await;
+
+                            //send default spawn
+                            let flytis: f32 = 0.0;
+                            write_position(&mut buffer, 8, 64, 8);
+                            buffer.extend(flytis.to_be_bytes());
+                            flush(&mut stream, &mut buffer, CPlayPacketid::SetDefaultSpawn as i32).await;
+
+                            //send one chunk
+                            let mut chunk_data = vec![];
+                            let mut handle = fs::File::open("chunk.bin").unwrap();
+                            handle.read_to_end(&mut chunk_data).unwrap();
+                            drop(handle);
+
+                            for x in 0..7 {
+                                for y in 0..7 {
+                                    let chunk_x: i32 = x - 3;
+                                    let chunk_z: i32 = y - 3;
+                                    buffer.extend(chunk_x.to_be_bytes());
+                                    buffer.extend(chunk_z.to_be_bytes());
+                                    buffer.extend(chunk_data.clone());
+                                    flush(&mut stream, &mut buffer, CPlayPacketid::LoadChunk as i32).await;
+                                }
+                            }
+
+                            let sync_player = SynchronizePlayerPosition::new(player.x, player.y, player.z, player.yaw, player.pitch, 0, false);
+                            SynchronizePlayerPosition::serialize(&sync_player, &mut buffer);
+                            flush(&mut stream, &mut buffer, CPlayPacketid::PlayerPos as i32).await;
+
+                            //push player to playerlist
+                            let mut players = players_accessor.lock().await;
+                            for p in players.iter() {
+                                buffer.push(9);
+                                write_var_int(&mut buffer, 1);
+                                buffer.extend(p.uuid.to_be_bytes());
+                                write_string(&mut buffer, p.username.clone());
+                                write_var_int(&mut buffer, 0);
+                                buffer.push(1);
+                                flush(&mut stream, &mut buffer, CPlayPacketid::PlayerInfo as i32).await;
+                                
+                                write_var_int(&mut buffer, p.entity_id);
+                                buffer.extend(p.uuid.to_be_bytes());
+                                buffer.extend(p.x.to_be_bytes());
+                                buffer.extend(p.y.to_be_bytes());
+                                buffer.extend(p.z.to_be_bytes());
+                                buffer.extend([0, 0]);
+                                flush(&mut stream, &mut buffer, CPlayPacketid::SpawnPlayer as i32).await;
+                            }
+                            players.push(player.clone());
+                            drop(players);
+                            
+                            write_var_int(&mut buffer, player.entity_id);
+                            buffer.extend(player.uuid.to_be_bytes());
+                            buffer.extend(player.x.to_be_bytes());
+                            buffer.extend(player.y.to_be_bytes());
+                            buffer.extend(player.z.to_be_bytes());
+                            buffer.extend([0, 0]);
+                            broadcast(&tx, buffer, CPlayPacketid::SpawnPlayer as i32, &stream);
+
+                            let mut buffer = vec![];
+                            write_string_chat(&mut buffer, &format!("{} joined the game", player.username));
+                            buffer.push(0);
+                            broadcast(&tx, buffer, CPlayPacketid::Chat as i32, &stream);
+
+                            let mut streams = streams_accessor.lock().await;
+                            streams.push(stream);
+                            drop(streams);
+
+                            loop {
+                                tokio::time::sleep(Duration::from_millis(10)).await;
+                            }
+                        }
+                        _ => {}
+                    }
+                }
+                _ => {}
+            }
+        });
+    }
+}
+    /*
 
     let listener = TcpListener::bind("0.0.0.0:51413")?;
     let players: Vec<Player> = vec![];
@@ -668,5 +912,6 @@ fn main() -> std::io::Result<()> {
                 eprintln!("Error accepting connection: {}", e);
             }
         }
+        
     })
-}
+    */
