@@ -1,11 +1,8 @@
-use std::{
-    io::Write, path::Path, fs, sync::mpsc::Sender,
-};
-
-use tokio::{net::TcpStream, io::{AsyncReadExt, AsyncWriteExt}};
+use std::{io::Write, path::Path, fs, collections::hash_map::Values};
+use tokio::{net::TcpStream, io::{AsyncReadExt, AsyncWriteExt}, sync::mpsc::Sender};
 use uuid::Uuid;
 
-use crate::{structs::{Player, StatusPlayers, Broadcast}, packets::*};
+use crate::{structs::{Player, StatusPlayers, Packet}, packets::*};
 
 const SEGMENT_BITS: u8 = 0x7F;
 const CONTINUE_BIT: u8 = 0x80;
@@ -13,10 +10,7 @@ const CONTINUE_BIT: u8 = 0x80;
 pub async fn read_next(stream: &mut TcpStream) -> Option<u8> {
     let _n = match stream.read_u8().await {
         Ok(n) => return Some(n),
-        Err(e) => {
-            eprintln!("failed to read from socket; err = {:?}", e);
-            return None;
-        }
+        Err(e) => return None,
     };
 }
 
@@ -144,14 +138,14 @@ pub fn write_position(buffer: &mut Vec<u8>, x: i32, y: i32, z: i32) {
     buffer.extend(pos.to_be_bytes());
 }
 
-pub fn broadcast(tx: &Sender<Broadcast>, buffer: Vec<u8>, packet_id: i32, stream: &TcpStream){
-    let broacast = Broadcast {
-        data: buffer,
+pub async fn broadcast(tx: &Sender<Packet>, buffer: Vec<u8>, packet_id: i32, entity_id: i32){
+    let broacast = Packet {
         packet_id,
-        stream_name: stream.peer_addr().unwrap().to_string()
+        data: buffer,
+        entity_id
     };
     
-    tx.send(broacast).unwrap();
+    tx.send(broacast).await.unwrap();
 }
 
 pub fn read_position(buffer: &mut Vec<u8>) -> (i32, i32, i32) {
@@ -178,33 +172,14 @@ pub fn disconnect_player(players: &mut Vec<Player>, username: &String) {
     }
 }
 
-pub fn has_player(players: &Vec<Player>, username: &String) -> bool {
-    for plr in players.iter() {
-        if plr.username == *username {
-            return true;
-        };
-    }
-    return false;
-}
-
-pub fn _get_player(players: &Vec<Player>, username: &String) -> Option<Player> {
-    for plr in players.iter() {
-        if plr.username == *username {
-            return Some(plr.clone());
-        };
-    }
-
-    None
-}
-
-pub fn populate_players(players: &Vec<Player>) -> Vec<StatusPlayers> {
+pub fn populate_players(players: Values<String, (Player, Sender<Packet>)>) -> Vec<StatusPlayers> {
     let mut plrs: Vec<StatusPlayers> = vec![];
 
     if players.len() == 0 {
         return plrs;
     };
 
-    for plr in players {
+    for (plr, sender) in players.into_iter() {
         let player = StatusPlayers {
             name: plr.username.clone(),
             id: Uuid::from_bytes(plr.uuid.to_be_bytes()).to_string(),

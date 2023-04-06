@@ -17,10 +17,11 @@ pub struct Player {
     pub gamemode: u8,
 }
 
-pub struct Broadcast {
-    pub data: Vec<u8>, 
-    pub packet_id: i32, 
-    pub stream_name: String
+#[derive(Debug, Clone)]
+pub struct Packet {
+    pub packet_id: i32,
+    pub data: Vec<u8>,
+    pub entity_id: i32,
 }
 
 #[derive(Serialize, Deserialize, Debug)]

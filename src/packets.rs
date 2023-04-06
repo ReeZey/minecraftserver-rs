@@ -1,3 +1,4 @@
+#[allow(dead_code)]
 pub enum CPlayPacketid {
     SpawnPlayer = 0x02,
     SwingArm = 0x03,
@@ -16,7 +17,7 @@ pub enum CPlayPacketid {
     PlayerLeft = 0x35,
     PlayerInfo = 0x36,
     PlayerPos = 0x38,
-    _CenterChunk = 0x4A,
+    CenterChunk = 0x4A,
     SetDefaultSpawn = 0x4C,
     EntityMetadata = 0x4E,
     Chat = 0x60,
