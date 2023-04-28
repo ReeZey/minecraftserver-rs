@@ -31,23 +31,25 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     
 
     let entity_id = 0;
-    let players: HashMap<String, (Player, Sender<Packet>)> = HashMap::new();
+    let players: HashMap<String, (Player, Arc<Mutex<TcpStream>>)> = HashMap::new();
 
     let players_accessor = Arc::new(Mutex::new(players));
     let entity_accessor = Arc::new(Mutex::new(entity_id));
 
     let listener = TcpListener::bind("0.0.0.0:51413").await?;
-    let (broadcast_send, mut broadcast_recv) = channel::<Packet>(1024);
+    let (broadcast_send, mut broadcast_recv) = channel::<Packet>(100);
 
     let accessor = players_accessor.clone();
     tokio::spawn(async move {
         loop {
-            while let Some(msg) = broadcast_recv.recv().await {
-                let players = accessor.lock().await;
-                for (player, stream) in players.values().into_iter() {
-                    if player.entity_id == msg.entity_id { continue };
-                    stream.send(msg.clone()).await.unwrap();
-                }
+            let packet = broadcast_recv.recv().await.unwrap();
+
+            let players = accessor.lock().await;
+            for (player, stream_arc) in players.values().into_iter() {
+                if player.entity_id == packet.entity_id { continue };
+
+                let mut stream = stream_arc.lock().await;
+                flush(&mut stream, &mut packet.data.clone(), packet.packet_id).await;
             }
         }
     });
@@ -55,7 +57,6 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     loop {
         let (mut stream, _) = listener.accept().await?;
         let broadcast_send = broadcast_send.clone();
-        let (client_send, mut client_recv) = channel(1024);
 
         let players_accessor = players_accessor.clone();
         let entity_accessor = entity_accessor.clone();
@@ -216,7 +217,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
                             //push player to playerlist
                             let mut players = players_accessor.lock().await;
-                            for (p, sender) in players.values().into_iter() {
+                            for (p, _sender) in players.values().into_iter() {
                                 buffer.push(9);
                                 write_var_int(&mut buffer, 1);
                                 buffer.extend(p.uuid.to_be_bytes());
@@ -247,25 +248,21 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                             buffer.push(0);
                             broadcast(&broadcast_send, buffer, CPlayPacketid::Chat as i32, player.entity_id).await;
 
-                            players.insert(player.username.clone(), (player.clone(), client_send.clone()));
+                            let stream_accessor = Arc::new(Mutex::new(stream));
+                            players.insert(player.username.clone(), (player.clone(), stream_accessor.clone()));
                             drop(players);
 
                             let waker = futures::task::noop_waker();
                             let mut cx = std::task::Context::from_waker(&waker);
 
-                            let mut tick_counter = 0;
 
                             let broadcast_send = broadcast_send.clone();
                             loop {
-                                while let Poll::Ready(Some(mut packet)) = client_recv.poll_recv(&mut cx){
-                                    flush(&mut stream, &mut packet.data, packet.packet_id).await;
-                                }
-
+                                let mut stream = stream_accessor.lock().await;
                                 match stream.poll_read_ready(&mut cx) {
                                     Poll::Ready(Ok(())) => {
                                         let abc = handle_stream(&mut stream, &mut player, &broadcast_send).await;
                                         if abc.is_none() {
-
                                             let mut players = players_accessor.lock().await;
                                             players.remove(&player.username);
                                             println!("player {} disconnected, total: {}", player.username, players.len());
@@ -297,16 +294,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                                     Poll::Pending => {},
                                 }
 
-                                tick_counter += 1;
-                                if tick_counter > 5 {
-                                    tick_counter = 0;
-
-                                    let lastkeepalive: i64 = 69;
-
-                                    let mut buffer: Vec<u8> = vec![];
-                                    buffer.extend(lastkeepalive.to_be_bytes());
-                                    flush(&mut stream, &mut buffer, CPlayPacketid::KeepAlive as i32).await;
-                                }
+                                let lastkeepalive: i64 = 69;
+                                let mut buffer: Vec<u8> = vec![];
+                                buffer.extend(lastkeepalive.to_be_bytes());
+                                flush(&mut stream, &mut buffer, CPlayPacketid::KeepAlive as i32).await;
                             }
                         }
                         _ => {}

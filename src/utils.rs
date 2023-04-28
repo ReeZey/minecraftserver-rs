@@ -1,5 +1,5 @@
-use std::{io::Write, path::Path, fs, collections::hash_map::Values};
-use tokio::{net::TcpStream, io::{AsyncReadExt, AsyncWriteExt}, sync::mpsc::Sender};
+use std::{io::Write, path::Path, fs, collections::hash_map::Values, sync::Arc};
+use tokio::{net::TcpStream, io::{AsyncReadExt, AsyncWriteExt}, sync::{mpsc::Sender, Mutex}};
 use uuid::Uuid;
 
 use crate::{structs::{Player, StatusPlayers, Packet}, packets::*};
@@ -172,7 +172,7 @@ pub fn disconnect_player(players: &mut Vec<Player>, username: &String) {
     }
 }
 
-pub fn populate_players(players: Values<String, (Player, Sender<Packet>)>) -> Vec<StatusPlayers> {
+pub fn populate_players(players: Values<String, (Player, Arc<Mutex<TcpStream>>)>) -> Vec<StatusPlayers> {
     let mut plrs: Vec<StatusPlayers> = vec![];
 
     if players.len() == 0 {
